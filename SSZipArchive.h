@@ -12,16 +12,29 @@
 #import <Foundation/Foundation.h>
 #include "minizip/unzip.h"
 
+extern NSString * const SSZipArchiveErrorDomain;
+enum {
+    SSZipArchiveInternalError = 1,
+    SSZipArchiveDocumentStartError,
+    SSZipArchiveEmptyDocumentError,
+    SSZipArchivePrematureDocumentEndError,
+};
+typedef NSInteger SSZipArchiveError;
+
 @protocol SSZipArchiveDelegate;
 
 @interface SSZipArchive : NSObject
+
++ (BOOL)canOpenZipArchive:(NSString *)path password:(NSString *)password isEncrypted:(BOOL *)isEncrypted error:(NSError **)error;
 
 // Unzip
 + (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination;
 + (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error;
 
 + (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination delegate:(id<SSZipArchiveDelegate>)delegate;
-+ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error delegate:(id<SSZipArchiveDelegate>)delegate;
++ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error delegate:(id<SSZipArchiveDelegate>)delegate contentsOfArchive:(NSArray **)contentsOfArchive;
+
++ (NSArray *)contentsOfZIPArchiveAtPath:(NSString *)path error:(NSError **)error;
 
 // Zip
 + (BOOL)createZipFileAtPath:(NSString *)path withFilesAtPaths:(NSArray *)filenames;

@@ -15,6 +15,8 @@
 
 #define CHUNK 16384
 
+NSString * const SSZipArchiveErrorDomain = @"SSZipArchiveError";
+
 @interface SSZipArchive ()
 + (NSDate *)_dateWithMSDOSFormat:(UInt32)msdosDateTime;
 @end
@@ -29,28 +31,14 @@
 
 #pragma mark - Unzipping
 
-+ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination {
-	return [self unzipFileAtPath:path toDestination:destination delegate:nil];
-}
-
-
-+ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error {
-	return [self unzipFileAtPath:path toDestination:destination overwrite:overwrite password:password error:error delegate:nil];
-}
-
-
-+ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination delegate:(id<SSZipArchiveDelegate>)delegate {
-	return [self unzipFileAtPath:path toDestination:destination overwrite:YES password:nil error:nil delegate:delegate];
-}
-
-
-+ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error delegate:(id<SSZipArchiveDelegate>)delegate {
-	// Begin opening
-	zipFile zip = unzOpen((const char*)[path UTF8String]);	
++ (BOOL)canOpenZipArchive:(NSString *)path password:(NSString *)password isEncrypted:(BOOL *)isEncrypted error:(NSError **)error
+{
+ 	// Begin opening
+	zipFile zip = unzOpen((const char*)[path UTF8String]);
 	if (zip == NULL) {
-		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open zip file" forKey:NSLocalizedDescriptionKey];
+		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open zip archive" forKey:NSLocalizedDescriptionKey];
 		if (error) {
-			*error = [NSError errorWithDomain:@"SSZipArchiveErrorDomain" code:-1 userInfo:userInfo];
+			*error = [NSError errorWithDomain:SSZipArchiveErrorDomain code:SSZipArchiveDocumentStartError userInfo:userInfo];
 		}
 		return NO;
 	}
@@ -60,10 +48,126 @@
 	
 	// Begin unzipping
 	if (unzGoToFirstFile(zip) != UNZ_OK) {
-		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open first file in zip file" forKey:NSLocalizedDescriptionKey];
+		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open first file in zip archive" forKey:NSLocalizedDescriptionKey];
 		if (error) {
-			*error = [NSError errorWithDomain:@"SSZipArchiveErrorDomain" code:-2 userInfo:userInfo];
+			*error = [NSError errorWithDomain:SSZipArchiveErrorDomain code:SSZipArchiveInternalError userInfo:userInfo];
 		}
+        
+        unzClose(zip);
+		return NO;
+	}
+    
+	BOOL success = YES;
+	int ret = 0;
+	unsigned char buffer[4096] = {0};
+    
+	NSInteger currentFileNumber = 0;
+	do {
+		if ([password length] == 0) {
+			ret = unzOpenCurrentFile(zip);
+		} else {
+			ret = unzOpenCurrentFilePassword(zip, [password cStringUsingEncoding:NSASCIIStringEncoding]);
+		}
+		
+		if (ret != UNZ_OK) {
+			success = NO;
+			break;
+		}
+		
+		// Reading data and write to file
+		unz_file_info fileInfo;
+		memset(&fileInfo, 0, sizeof(unz_file_info));
+		
+		ret = unzGetCurrentFileInfo(zip, &fileInfo, NULL, 0, NULL, 0, NULL, 0);
+		if (ret != UNZ_OK) {
+			success = NO;
+			unzCloseCurrentFile(zip);
+			break;
+		}
+        
+        BOOL crypted = ((fileInfo.flag & 1) != 0);
+        if (isEncrypted) {
+            *isEncrypted = crypted;
+        }
+        
+        const uLong ZipCompressionMethodStore = 0;
+        
+        BOOL fileIsSymbolicLink = NO;
+        
+        if((fileInfo.compression_method == ZipCompressionMethodStore) && // Is it compressed?
+           (S_ISDIR(fileInfo.external_fa)) && // Is it marked as a directory
+           (fileInfo.compressed_size > 0)) // Is there any data?
+        {
+            fileIsSymbolicLink = YES;
+        }
+        
+        if(!fileIsSymbolicLink)
+        {
+            int readBytes = unzReadCurrentFile(zip, buffer, 4096);
+            
+            if (readBytes < 0) {
+                success = NO;
+            }
+        }
+		
+		
+		unzCloseCurrentFile( zip );
+		ret = unzGoToNextFile( zip );
+		
+		currentFileNumber++;
+	} while(ret == UNZ_OK && ret != UNZ_END_OF_LIST_OF_FILE);
+	
+	// Close
+	unzClose(zip);
+	
+	return success;
+}
+
++ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination {
+	return [self unzipFileAtPath:path toDestination:destination delegate:nil];
+}
+
+
++ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error {
+	return [self unzipFileAtPath:path toDestination:destination overwrite:overwrite password:password error:error delegate:nil contentsOfArchive:NULL];
+}
+
+
++ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination delegate:(id<SSZipArchiveDelegate>)delegate {
+	return [self unzipFileAtPath:path toDestination:destination overwrite:YES password:nil error:nil delegate:delegate contentsOfArchive:NULL];
+}
+
++ (NSArray *)contentsOfZIPArchiveAtPath:(NSString *)path error:(NSError **)error
+{
+    NSArray *contentsOfArchive = nil;
+    if ([self unzipFileAtPath:path toDestination:nil overwrite:YES password:nil error:error delegate:nil contentsOfArchive:&contentsOfArchive]) {
+        return contentsOfArchive;
+    }
+    return [NSArray array];
+}
+
++ (BOOL)unzipFileAtPath:(NSString *)path toDestination:(NSString *)destination overwrite:(BOOL)overwrite password:(NSString *)password error:(NSError **)error delegate:(id<SSZipArchiveDelegate>)delegate contentsOfArchive:(NSArray **)contentsOfArchive {
+	// Begin opening
+	zipFile zip = unzOpen((const char*)[path UTF8String]);	
+	if (zip == NULL) {
+		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open zip archive" forKey:NSLocalizedDescriptionKey];
+		if (error) {
+			*error = [NSError errorWithDomain:SSZipArchiveErrorDomain code:SSZipArchiveDocumentStartError userInfo:userInfo];
+		}
+		return NO;
+	}
+	
+	unz_global_info  globalInfo = {0ul, 0ul};
+	unzGetGlobalInfo(zip, &globalInfo);
+	
+	// Begin unzipping
+	if (unzGoToFirstFile(zip) != UNZ_OK) {
+		NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to open first file in zip archive" forKey:NSLocalizedDescriptionKey];
+		if (error) {
+			*error = [NSError errorWithDomain:SSZipArchiveErrorDomain code:SSZipArchiveInternalError userInfo:userInfo];
+		}
+        
+        unzClose(zip);
 		return NO;
 	}
 	
@@ -72,6 +176,7 @@
 	unsigned char buffer[4096] = {0};
 	NSFileManager *fileManager = [NSFileManager defaultManager];
 	NSMutableSet *directoriesModificationDates = [[NSMutableSet alloc] init];
+    NSMutableArray *contentPaths = [NSMutableArray array];
 	
 	// Message delegate
 	if ([delegate respondsToSelector:@selector(zipArchiveWillUnzipArchiveAtPath:zipInfo:)]) {
@@ -101,7 +206,7 @@
 			unzCloseCurrentFile(zip);
 			break;
 		}
-		
+        
 		// Message delegate
 		if ([delegate respondsToSelector:@selector(zipArchiveWillUnzipFileAtIndex:totalFiles:archivePath:fileInfo:)]) {
 			[delegate zipArchiveWillUnzipFileAtIndex:currentFileNumber totalFiles:(NSInteger)globalInfo.number_entry
@@ -139,16 +244,41 @@
         }
         
 		// Check if it contains directory
-		NSString *strPath = [NSString stringWithCString:filename encoding:NSUTF8StringEncoding];
 		BOOL isDirectory = NO;
 		if (filename[fileInfo.size_filename-1] == '/' || filename[fileInfo.size_filename-1] == '\\') {
 			isDirectory = YES;
 		}
-		free(filename);
+        
+        
+		NSString *strPath = [[NSString alloc] initWithBytesNoCopy:filename
+                                                           length:fileInfo.size_filename + 1
+                                                         encoding:NSUTF8StringEncoding
+                                                     freeWhenDone:YES];
+        if (!strPath)
+        {
+            // Special Considerations
+            // If an error occurs during the creation of the string, then bytes is not freed even if flag is YES. In this case, the caller is responsible
+            // for freeing the buffer. This allows the caller to continue trying to create a string with the buffer, without having the buffer deallocated.
+            free(filename);
+        }
 		
 		// Contains a path
 		if ([strPath rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"/\\"]].location != NSNotFound) {
 			strPath = [strPath stringByReplacingOccurrencesOfString:@"\\" withString:@"/"];
+		}
+        
+        if (contentsOfArchive != NULL) {
+            NSString *dirPath = [strPath stringByDeletingLastPathComponent];
+            if (![dirPath isEqualToString:@""] && ![contentPaths containsObject:dirPath]) {
+                [contentPaths addObject:dirPath];
+            }
+            [contentPaths addObject:strPath];
+        }
+        
+        if (!destination) {
+			unzCloseCurrentFile(zip);
+			ret = unzGoToNextFile(zip);
+			continue;
 		}
 		
 		NSString *fullPath = [destination stringByAppendingPathComponent:strPath];
@@ -180,9 +310,23 @@
             while (fp) {
                 int readBytes = unzReadCurrentFile(zip, buffer, 4096);
 
-                if (readBytes > 0) {
+                if (readBytes < 0) {
+                    NSDictionary *userInfo = [NSDictionary dictionaryWithObject:@"failed to read file in zip archive" forKey:NSLocalizedDescriptionKey];
+                    if (error) {
+                        *error = [NSError errorWithDomain:SSZipArchiveErrorDomain code:SSZipArchiveInternalError userInfo:userInfo];
+                    }
+                    
+                    fclose(fp);
+                    unzCloseCurrentFile( zip );
+                    unzClose(zip);
+                    return NO;
+                }
+                else if (readBytes > 0)
+                {
                     fwrite(buffer, readBytes, 1, fp );
-                } else {
+                }
+                else
+                {
                     break;
                 }
             }
@@ -268,6 +412,10 @@
 	if (success && [delegate respondsToSelector:@selector(zipArchiveDidUnzipArchiveAtPath:zipInfo:unzippedPath:)]) {
 		[delegate zipArchiveDidUnzipArchiveAtPath:path zipInfo:globalInfo unzippedPath:destination];
 	}
+    
+    if (contentsOfArchive != NULL) {
+        *contentsOfArchive = [NSArray arrayWithArray:contentPaths];
+    }
 	
 	return success;
 }
