@@ -251,7 +251,7 @@ NSString * const SSZipArchiveErrorDomain = @"SSZipArchiveError";
         
         
 		NSString *strPath = [[NSString alloc] initWithBytesNoCopy:filename
-                                                           length:fileInfo.size_filename + 1
+                                                           length:fileInfo.size_filename
                                                          encoding:NSUTF8StringEncoding
                                                      freeWhenDone:YES];
         if (!strPath)
