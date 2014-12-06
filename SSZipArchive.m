@@ -268,9 +268,12 @@ NSString * const SSZipArchiveErrorDomain = @"SSZipArchiveError";
 		}
         
         if (contentsOfArchive != NULL) {
-            NSString *dirPath = [strPath stringByDeletingLastPathComponent];
-            if (![dirPath isEqualToString:@""] && ![contentPaths containsObject:dirPath]) {
-                [contentPaths addObject:dirPath];
+            NSString *parentPath = [strPath stringByDeletingLastPathComponent];
+            while (![parentPath isEqualToString:@""] &&  ![contentPaths containsObject:parentPath])
+            {
+                // this makes a wrong file list order because /1/2/3 would show up before /1/2. 
+                [contentPaths addObject:parentPath];
+                parentPath = [parentPath stringByDeletingLastPathComponent];
             }
             [contentPaths addObject:strPath];
         }
